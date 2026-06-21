@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Free Text Keystroke Verification</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-kicker">Keystroke Dynamics</span>
+        <h1>自由寫作身分驗證</h1>
+      </div>
+      <p class="topbar-note">
+        請輸入您的帳號以開始寫作驗證。系統將在背景進行持續性打字行為特徵分析，並於送出文章後顯示完整分析報告。
+      </p>
+    </header>
+
+    <section id="login-screen" class="screen active">
+      <div class="panel login-panel">
+        <div class="login-copy">
+          <h2>自由寫作身份驗證</h2>
+          <p>
+            歡迎使用打字特徵驗證系統。您可以輸入您的帳號以進行寫作身份驗證。
+          </p>
+          <p>
+            如果您是新使用者，請先建立您的打字動態特徵。
+          </p>
+          <div style="margin-top: 16px;">
+            <button id="btn-go-register" class="btn btn-secondary" style="width: 100%;">前往註冊新帳號</button>
+          </div>
+        </div>
+        <div class="form-card">
+          <label for="participant-id">帳號 ID (Account ID)</label>
+          <input id="participant-id" type="text" placeholder="例如：user_01" autocomplete="off">
+          <button id="btn-login" class="btn btn-primary">開始自由寫作</button>
+          <div id="login-message" class="message" role="status"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== 註冊區塊 (完全整合自原 keystroke_logger 專案，但風格融入本系統) ========== -->
+    <section id="register-screen" class="screen">
+      <div class="panel register-panel" style="max-width: 680px; margin: 0 auto; padding: 32px;">
+        
+        <!-- 1. 註冊資料輸入與語言選擇 -->
+        <div id="reg-login-section" class="reg-section active">
+          <div class="register-header" style="margin-bottom: 20px;">
+            <h2 style="font-size: 28px;">註冊打字特徵</h2>
+            <p class="subtitle" style="color: var(--muted); margin-top: 8px;">請輸入您的帳號，並開始錄製打字特徵基準。</p>
+          </div>
+          
+          <div class="form-card">
+            <!-- 語言選擇器 -->
+            <div class="form-group" style="margin-bottom: 18px;">
+              <label style="display: block; margin-bottom: 8px;">測試語言 (Test Language)</label>
+              <div class="lang-toggle" id="reg-lang-toggle" style="display: flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden;">
+                <button type="button" id="btn-reg-lang-zh" class="lang-btn active" data-lang="zh" style="flex: 1; padding: 12px; background: var(--surface-muted); color: var(--ink); border: none; font-weight: 700; cursor: pointer;">
+                  中文 (ZH)
+                </button>
+                <button type="button" id="btn-reg-lang-en" class="lang-btn" data-lang="en" style="flex: 1; padding: 12px; background: #fff; color: var(--muted); border: none; font-weight: 700; cursor: pointer; border-left: 1px solid var(--line);">
+                  English (EN)
+                </button>
+              </div>
+            </div>
+
+            <!-- 帳號輸入 -->
+            <div class="form-group" style="margin-bottom: 20px;">
+              <label for="reg-student-id" style="display: block; margin-bottom: 8px;">註冊帳號 (Account ID)</label>
+              <input type="text" id="reg-student-id" placeholder="請輸入帳號，例如: user_01" autocomplete="off" />
+            </div>
+            
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+              <button id="btn-reg-start" class="btn btn-primary">開始錄製打字特徵</button>
+              <button id="btn-reg-back-home" class="btn btn-secondary">返回首頁</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 2. 註冊打字測試區 -->
+        <div id="reg-test-section" class="reg-section" style="display: none;">
+          <div class="header-row" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <span class="badge badge-ok" id="reg-progress-text">1 / 15</span>
+            <span class="badge badge-warn" id="reg-lang-badge">中文</span>
+            <span class="user-id-display" id="reg-display-id" style="color: var(--muted); font-size: 14px;">帳號: ---</span>
+          </div>
+          <h3 class="prompt-title" style="color: var(--muted); font-size: 15px; margin-bottom: 12px;">請依樣打出下方句子：</h3>
+          <div class="sentence-box" id="reg-sentence-display" style="background: var(--surface-muted); border: 1px solid var(--line); border-radius: 8px; padding: 20px; font-size: 22px; font-weight: 700; text-align: center; margin-bottom: 18px; color: var(--ink); word-break: break-all;">
+            <!-- 題目文字會動態注入 -->
+          </div>
+          <p class="instruction" style="text-align: center; color: var(--muted); font-size: 14px; margin-bottom: 12px;">（完成該句後，請直接按下 <strong>Enter 鍵</strong> 提交）</p>
+          
+          <textarea id="reg-test-input" placeholder="請點此開始輸入..." rows="3" style="width: 100%; min-height: 100px; padding: 12px; font-size: 18px; line-height: 1.6; border: 1px solid var(--line); border-radius: 8px; outline: none;"></textarea>
+
+          <!-- WPM 即時顯示 -->
+          <div id="reg-wpm-display" class="wpm-display" style="display: flex; justify-content: flex-end; font-size: 14px; color: var(--muted); margin-top: 8px;">
+            WPM: <span id="reg-wpm-value" style="color: var(--accent); font-weight: 700; font-size: 16px; margin-left: 4px;">0</span>
+          </div>
+          
+          <div id="reg-warning-msg" class="warning message error" style="margin-top: 12px; text-align: center; display: none;">輸入內容與題目不一致，請修正後再提交。</div>
+        </div>
+
+        <!-- 3. 註冊完成通知區 -->
+        <div id="reg-result-section" class="reg-section text-center" style="display: none; text-align: center; padding: 20px 0;">
+          <div class="success-icon" style="width: 64px; height: 64px; border-radius: 50%; background: #dff0e8; display: flex; align-items: center; justify-content: center; margin: 0 auto 20px auto;">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--ok)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+          </div>
+          <h2 style="font-size: 26px; margin-bottom: 12px;">註冊完成！</h2>
+          <p class="subtitle" style="color: var(--muted); line-height: 1.6;">您的打字動態行為基準已成功建立並儲存。<br>現在您可以使用此帳號開始進行自由寫作驗證了。</p>
+          <button id="btn-reg-finish-done" class="btn btn-primary" style="margin-top: 24px; width: 100%;">返回首頁</button>
+        </div>
+
+      </div>
+    </section>
+
+
+    <section id="writing-screen" class="screen">
+      <div class="writer-layout">
+        <section class="panel editor-panel">
+          <div class="editor-toolbar">
+            <span id="writer-name">---</span>
+            <span>自由寫作驗證</span>
+          </div>
+          <div class="textarea-wrap">
+            <textarea id="article-input" spellcheck="false" placeholder="請在這裡自由撰寫文章。"></textarea>
+          </div>
+        </section>
+
+        <aside class="panel dashboard" aria-label="Writing dashboard">
+          <h2>寫作儀表板</h2>
+          <div class="metric-grid">
+            <div class="metric">
+              <span class="metric-label">字數</span>
+              <strong id="metric-words" class="metric-value">0</strong>
+            </div>
+            <div class="metric">
+              <span class="metric-label">驗證次數</span>
+              <strong id="metric-verifications" class="metric-value">0</strong>
+            </div>
+            <div class="metric">
+              <span class="metric-label">按鍵事件數 (Keystrokes)</span>
+              <strong id="metric-keystrokes" class="metric-value">0</strong>
+            </div>
+          </div>
+          <div id="writing-status" class="message" role="status"></div>
+          <div class="dashboard-actions">
+            <button id="btn-submit" class="btn btn-primary">送出文章</button>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <section id="result-screen" class="screen">
+      <div class="result-layout">
+        <section class="panel result-panel">
+          <div class="result-header">
+            <div>
+              <h2>持續性多因子驗證 (Continuous Verification)</h2>
+              <p class="message">此為寫作過程中的持續性動態驗證紀錄。</p>
+            </div>
+            <div class="result-actions">
+              <button id="btn-download-keystrokes" class="btn btn-secondary">下載按鍵軌跡 (TSV)</button>
+              <button id="btn-download-results" class="btn btn-primary">下載分析報告 (JSON)</button>
+            </div>
+          </div>
+
+          <div class="summary-grid">
+            <div class="summary-item">
+              <span class="summary-label">驗證次數</span>
+              <strong id="continuous-total" class="summary-value">0</strong>
+            </div>
+            <div class="summary-item">
+              <span class="summary-label">通過</span>
+              <strong id="continuous-pass" class="summary-value">0</strong>
+            </div>
+            <div class="summary-item">
+              <span class="summary-label">未通過</span>
+              <strong id="continuous-fail" class="summary-value">0</strong>
+            </div>
+          </div>
+
+          <div id="continuous-list" class="result-list"></div>
+        </section>
+
+        <section class="panel result-panel">
+          <div class="result-header">
+            <div>
+              <h2>最終判定驗證 (Final Summary Verification)</h2>
+              <p class="message">送出文章後，系統會彙整本次所有按鍵事件執行最終的全局特徵比對。</p>
+            </div>
+          </div>
+
+          <div class="final-result-grid">
+            <div class="field">
+              <span class="field-label">最終判定結果</span>
+              <strong id="final-genuine" class="field-value">-</strong>
+            </div>
+            <div class="field">
+              <span class="field-label">相似度偏差值 (Score)</span>
+              <strong id="final-score" class="field-value">-</strong>
+            </div>
+            <div class="field">
+              <span class="field-label">臨界判定閾值 (Threshold)</span>
+              <strong id="final-threshold" class="field-value">-</strong>
+            </div>
+            <div class="field">
+              <span class="field-label">閾值計算來源 (Source)</span>
+              <strong id="final-source" class="field-value">-</strong>
+            </div>
+          </div>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

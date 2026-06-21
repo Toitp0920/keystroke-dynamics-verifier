@@ -1,0 +1,225 @@
+Keystroke Dynamics Free-Text Verification 啟動說明
+=================================================
+
+本專案是本機版自由寫作身分驗證網站。請把整個資料夾一起搬到新電腦，不要只複製單一檔案。
+
+
+一、必須保留的檔案與資料夾
+--------------------------
+
+核心網站：
+- index.html
+- style.css
+- app.js
+- server.py
+- keystroke_verifier.py
+- requirements.txt
+- threshold_config.json
+
+模型與推論：
+- 10persentData_model.weights.h5
+- t2b_colab
+
+註冊資料與快取：
+- baseline_profiles
+- processed_baselines
+
+說明：
+- baseline_profiles 是原始註冊 TSV。
+- processed_baselines 是已前處理好的 .npy 特徵快取；如果搬家後不存在，系統會依 baseline_profiles 重新建立。
+- verification_results 是實驗結果輸出資料夾；如果不存在，送出文章後系統會自動建立。
+
+
+二、第一次在新電腦安裝環境
+--------------------------
+
+請先安裝 Anaconda 或 Miniconda。
+
+開啟「Anaconda Prompt」或支援 conda 的終端機，切換到專案資料夾：
+
+cd /d C:\Users\你的使用者名稱\Downloads\Fixed-text_Web_CX\keystroke_logger_Chinese
+
+建立 conda 環境：
+
+conda create -n kd_web python=3.11 -y
+
+啟動環境：
+
+conda activate kd_web
+
+更新 pip：
+
+python -m pip install --upgrade pip
+
+安裝 requirements：
+
+pip install -r requirements.txt
+
+如果你已經有自己的 kd_web 環境，可以不用重新 create，只要：
+
+conda activate kd_web
+pip install -r requirements.txt
+
+
+三、啟動前快速測試
+------------------
+
+先確認前處理與 baseline cache 可讀：
+
+python3 keystroke_verifier.py
+
+如果 python3 指令在新電腦不能用，改用：
+
+python keystroke_verifier.py
+
+再測試 TensorFlow 權重是否能載入：
+
+python3 keystroke_verifier.py --user 113B10686 --embed
+
+如果 python3 指令不能用，改用：
+
+python keystroke_verifier.py --user 113B10686 --embed
+
+看到 embeddings: (...) 就代表模型權重可正常載入。
+
+
+四、啟動網站
+------------
+
+確認已經啟動 conda 環境：
+
+conda activate kd_web
+
+進入專案資料夾：
+
+cd /d C:\Users\你的使用者名稱\Downloads\Fixed-text_Web_CX\keystroke_logger_Chinese
+
+啟動本機 server：
+
+python3 server.py --host 127.0.0.1 --port 8000
+
+如果 python3 指令不能用，改用：
+
+python server.py --host 127.0.0.1 --port 8000
+
+成功時會看到類似：
+
+Keystroke verifier running at http://127.0.0.1:8000
+Press Ctrl+C to stop.
+
+
+五、開啟瀏覽器使用
+------------------
+
+開啟 Chrome、Edge 或其他瀏覽器，輸入：
+
+http://127.0.0.1:8000/
+
+使用流程：
+
+1. 輸入已註冊的 Participant ID。
+2. 按「檢查註冊資料」。
+3. 在大文字框自由寫作。
+4. 系統會每 100 筆模型 keystrokes 在背景做一次連續驗證。
+5. 寫完後按「送出文章」。
+6. 結果頁會顯示連續驗證與最後總結驗證。
+
+
+六、輸出資料位置
+----------------
+
+送出文章後，server 端會自動儲存：
+
+verification_results\free_text_session_ZH_{ID}_{時間}.json
+verification_results\free_text_keystrokes_ZH_{ID}_{時間}.tsv
+
+JSON 內容包含：
+- 連續驗證結果
+- 最後總結驗證結果
+- 使用的 threshold
+- score
+- threshold_source
+- TSV 路徑
+
+TSV 內容包含原始 keystroke records，可用於之後重新分析、重算 threshold、或檢查前處理。
+
+
+七、修改 threshold
+------------------
+
+threshold 設定檔：
+
+threshold_config.json
+
+目前格式類似：
+
+{
+  "users": {
+    "113B10686": {
+      "ZH": {
+        "final": 8.25,
+        "continuous": 10.9
+      }
+    }
+  }
+}
+
+說明：
+- final 是送出文章後的最後總結驗證 threshold。
+- continuous 是每 100 筆 keystrokes 的連續驗證 threshold。
+- 修改後請重新啟動 server，新的 threshold 才會套用。
+
+
+八、常見問題
+------------
+
+1. ID 找不到
+
+請確認 baseline_profiles 裡有對應 ID 的 TSV。
+檔名格式應類似：
+
+keystrokes_ZH_113B10686_20260324T09530.tsv
+
+
+2. TensorFlow 錯誤或 ModelNotLoadedError
+
+請確認已啟動 conda 環境，並安裝 requirements：
+
+conda activate kd_web
+pip install -r requirements.txt
+
+
+3. Windows 顯示 TensorFlow GPU warning
+
+如果訊息類似「TensorFlow GPU support is not available on native Windows」，通常可以忽略。
+本專案可以用 CPU 推論。
+
+
+4. Port 8000 被占用
+
+改用其他 port，例如：
+
+python3 server.py --host 127.0.0.1 --port 8001
+
+瀏覽器也改開：
+
+http://127.0.0.1:8001/
+
+
+5. 中文亂碼
+
+請用 server 網址開啟：
+
+http://127.0.0.1:8000/
+
+不要直接用檔案總管雙擊 index.html。
+
+
+九、停止網站
+------------
+
+在執行 server 的終端機按：
+
+Ctrl + C
+
+即可停止本機網站。

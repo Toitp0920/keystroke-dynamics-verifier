@@ -1,0 +1,21 @@
+# Python cache
+__pycache__/
+*.pyc
+
+# IDEs and System files
+.vscode/
+.idea/
+.gemini/
+*.log
+Thumbs.db
+.DS_Store
+
+# Keystroke dynamics database / results (ignore everything except .gitkeep)
+baseline_profiles/*
+!baseline_profiles/.gitkeep
+
+processed_baselines/*
+!processed_baselines/.gitkeep
+
+verification_results/*
+!verification_results/.gitkeep
