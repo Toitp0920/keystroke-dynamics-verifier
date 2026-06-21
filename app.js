@@ -984,79 +984,15 @@ function regSubmitCurrentSentence(userInput) {
     }
 }
 
-// 提交註冊資料到後端存檔 (取代原本的下載功能)
+// 提交註冊資料到後端存檔 (直接發送 JSON 數據)
 async function regFinishTest() {
-    let headers, rowMapper;
-    
-    if (regState.selectedLanguage === 'zh') {
-        headers = [
-            "PARTICIPANT_ID",
-            "TEST_SECTION_ID",
-            "SENTENCE",
-            "USER_INPUT",
-            "KEYSTROKE_ID",
-            "PRESS_TIME",
-            "RELEASE_TIME",
-            "LETTER",
-            "KEYCODE",
-            "ZHUYIN_STAGE",
-            "IME_STAGE",
-            "COMPOSING_DATA",
-            "COMPOSING_SEQ"
-        ];
-        rowMapper = (r) => [
-            r.PARTICIPANT_ID,
-            r.TEST_SECTION_ID,
-            r.SENTENCE,
-            r.USER_INPUT,
-            r.KEYSTROKE_ID,
-            r.PRESS_TIME,
-            r.RELEASE_TIME,
-            r.LETTER,
-            r.KEYCODE,
-            r.ZHUYIN_STAGE,
-            r.IME_STAGE,
-            r.COMPOSING_DATA,
-            r.COMPOSING_SEQ
-        ];
-    } else {
-        headers = [
-            "PARTICIPANT_ID",
-            "TEST_SECTION_ID",
-            "SENTENCE",
-            "USER_INPUT",
-            "KEYSTROKE_ID",
-            "PRESS_TIME",
-            "RELEASE_TIME",
-            "LETTER",
-            "KEYCODE"
-        ];
-        rowMapper = (r) => [
-            r.PARTICIPANT_ID,
-            r.TEST_SECTION_ID,
-            r.SENTENCE,
-            r.USER_INPUT,
-            r.KEYSTROKE_ID,
-            r.PRESS_TIME,
-            r.RELEASE_TIME,
-            r.LETTER,
-            r.KEYCODE
-        ];
-    }
-    
-    let tsvContent = headers.join("\t") + "\n";
-    regState.globalRecords.forEach(r => {
-        const row = rowMapper(r);
-        tsvContent += row.join("\t") + "\n";
-    });
-    
     try {
         regEl.testInput.disabled = true;
-        // 上傳到後端註冊 API
+        // 上傳到後端註冊 API，直接傳送 keystrokes 陣列
         await apiRequest("/api/register", {
             user_id: regState.participantId,
             language: regState.selectedLanguage.toUpperCase(),
-            tsv_data: tsvContent
+            keystrokes: regState.globalRecords
         });
         
         showRegSection('result');

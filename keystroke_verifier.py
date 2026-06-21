@@ -468,63 +468,79 @@ class KeystrokeVerifier:
     def ensure_baseline(
         self,
         user_id: str,
+        keystrokes_list: Optional[List[List[Dict[str, Any]]]] = None,
         language: Optional[str] = None,
         force: bool = False,
     ) -> Dict[str, Any]:
-        files = self.find_baseline_files(user_id, language=language)
-        if not files:
-            raise BaselineNotFoundError(f"No baseline TSV files found for user_id={user_id!r}")
-
         self.processed_dir.mkdir(parents=True, exist_ok=True)
         cache_path = self.cache_path_for_user(user_id, language)
-        current_sources = [_source_file_record(path) for path in files]
 
         if not force and cache_path.exists():
-            cached = np.load(cache_path, allow_pickle=True).item()
-            if (
-                cached.get("cache_version") == CACHE_VERSION
-                and cached.get("user_id") == user_id
-                and cached.get("language") == language
-                and cached.get("apply_simpac_cleaning") == self.apply_simpac_cleaning
-                and _records_match(cached.get("source_files", []), current_sources)
-            ):
-                cached["cache_path"] = str(cache_path.resolve())
-                return cached
+            try:
+                cached = np.load(cache_path, allow_pickle=True).item()
+                if (
+                    cached.get("cache_version") == CACHE_VERSION
+                    and cached.get("user_id") == user_id
+                    and cached.get("language") == language
+                    and cached.get("apply_simpac_cleaning") == self.apply_simpac_cleaning
+                ):
+                    cached["cache_path"] = str(cache_path.resolve())
+                    return cached
+            except Exception:
+                pass
 
-        cache = self._build_baseline_cache(user_id, language, files, current_sources)
+        if not keystrokes_list:
+            raise BaselineNotFoundError(f"No baseline cache found, and no keystrokes data supplied for user_id={user_id!r}")
+
+        cache = self._build_baseline_cache_from_data(user_id, language, keystrokes_list)
         np.save(cache_path, cache, allow_pickle=True)
         cache["cache_path"] = str(cache_path.resolve())
         return cache
 
-    def _build_baseline_cache(
+    def _build_baseline_cache_from_data(
         self,
         user_id: str,
         language: Optional[str],
-        files: Sequence[Path],
-        source_records: Sequence[Dict[str, Any]],
+        keystrokes_list: List[List[Dict[str, Any]]],
     ) -> Dict[str, Any]:
         base_tensors: List[np.ndarray] = []
         metadata: List[TemplateMeta] = []
 
-        for path in files:
-            parsed = parse_baseline_filename(path) or {}
-            sessions = read_tsv_keystrokes(path)
-            for section_id, events in sessions.items():
-                if not events:
-                    continue
-                base_tensors.append(events_to_base_tensor(events))
-                metadata.append(
-                    TemplateMeta(
-                        participant_id=events[0].participant_id,
-                        source_file=path.name,
-                        section_id=section_id,
-                        event_count=len(events),
-                        language=parsed.get("language"),
+        for idx, record_list in enumerate(keystrokes_list):
+            events = []
+            for row in record_list:
+                p_id = str(row.get("PARTICIPANT_ID") or row.get("participant_id") or user_id)
+                sec_id = str(row.get("TEST_SECTION_ID") or row.get("test_section_id") or f"session_{idx}")
+                try:
+                    event = RawKeystroke(
+                        participant_id=p_id,
+                        test_section_id=sec_id,
+                        press_time=int(float(row.get("PRESS_TIME") or row.get("press_time"))),
+                        release_time=int(float(row.get("RELEASE_TIME") or row.get("release_time"))),
+                        keycode=int(float(row.get("KEYCODE") or row.get("keycode"))),
+                        letter=str(row.get("LETTER") or row.get("letter", "")),
                     )
+                    events.append(event)
+                except (TypeError, ValueError):
+                    continue
+
+            if not events:
+                continue
+
+            events.sort(key=lambda e: (e.press_time, e.release_time, e.keycode))
+            base_tensors.append(events_to_base_tensor(events))
+            metadata.append(
+                TemplateMeta(
+                    participant_id=events[0].participant_id,
+                    source_file=f"db_record_{idx}",
+                    section_id=events[0].test_section_id,
+                    event_count=len(events),
+                    language=language,
                 )
+            )
 
         if not base_tensors:
-            raise ValueError(f"Baseline files for user_id={user_id!r} contain no usable keystrokes")
+            raise ValueError(f"No usable keystrokes found in baseline data for user_id={user_id!r}")
 
         simpac_samples = [
             tensor3_to_simpac_sample(tensor, apply_cleaning=self.apply_simpac_cleaning)
@@ -543,7 +559,7 @@ class KeystrokeVerifier:
             "sequence_length": SEQUENCE_LENGTH,
             "input_features": INPUT_FEATURES,
             "apply_simpac_cleaning": self.apply_simpac_cleaning,
-            "source_files": list(source_records),
+            "source_files": [{"name": f"db_record_{i}", "path": "db"} for i in range(len(keystrokes_list))],
             "template_meta": [item.to_dict() for item in metadata],
             "features": features,
             "profile_state": profile.to_state(),
@@ -553,9 +569,10 @@ class KeystrokeVerifier:
         self,
         user_id: str,
         records: Sequence[Dict[str, Any]],
+        keystrokes_list: Optional[List[List[Dict[str, Any]]]] = None,
         language: Optional[str] = None,
     ) -> Tuple[np.ndarray, List[Dict[str, Any]]]:
-        cache = self.ensure_baseline(user_id, language=language)
+        cache = self.ensure_baseline(user_id, keystrokes_list=keystrokes_list, language=language)
         profile = HistogramProfile.from_state(cache["profile_state"], random_seed=self.random_seed)
         base_tensors, metadata = self.records_to_base_tensors(records)
         if len(base_tensors) == 0:
@@ -688,12 +705,15 @@ class KeystrokeVerifier:
         self,
         user_id: str,
         records: Sequence[Dict[str, Any]],
+        keystrokes_list: Optional[List[List[Dict[str, Any]]]] = None,
         language: Optional[str] = None,
         threshold: Optional[float] = None,
         matching_strategy: Optional[str] = None,
     ) -> Dict[str, Any]:
-        cache = self.ensure_baseline(user_id, language=language)
-        query_features, query_meta = self.preprocess_records_for_user(user_id, records, language=language)
+        cache = self.ensure_baseline(user_id, keystrokes_list=keystrokes_list, language=language)
+        query_features, query_meta = self.preprocess_records_for_user(
+            user_id, records, keystrokes_list=keystrokes_list, language=language
+        )
 
         baseline_embeddings = self.get_baseline_embeddings(cache)
         query_embeddings = self.embed(query_features)
