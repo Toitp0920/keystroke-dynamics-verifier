@@ -620,6 +620,33 @@ def _timestamp() -> str:
     return datetime.now().strftime("%Y%m%dT%H%M%S")
 
 
+def check_and_download_weights():
+    """檢測並修復 Git LFS 指標檔案，自動從 GitHub 下載真實的 227MB 權重"""
+    weights_path = PROJECT_ROOT / "10persentData_model.weights.h5"
+    if not weights_path.exists() or weights_path.stat().st_size < 1024 * 1024:
+        print("[!] 偵測到模型權重檔案不存在或為 Git LFS 指標檔案，正在自動下載真實模型數據 (227MB)...")
+        url = "https://media.githubusercontent.com/media/Toitp0920/keystroke-dynamics-verifier/main/10persentData_model.weights.h5"
+        import urllib.request
+        try:
+            weights_path.parent.mkdir(parents=True, exist_ok=True)
+            temp_path = weights_path.with_suffix(".tmp")
+            
+            # 下載至臨時檔案
+            urllib.request.urlretrieve(url, temp_path)
+            
+            if temp_path.exists() and temp_path.stat().st_size > 1024 * 1024:
+                if weights_path.exists():
+                    weights_path.unlink()
+                temp_path.rename(weights_path)
+                print(f"[+] 成功下載並取代模型權重！大小：{weights_path.stat().st_size} bytes")
+            else:
+                print("[-] 下載的檔案無效或大小不足，請確認連結。")
+                if temp_path.exists():
+                    temp_path.unlink()
+        except Exception as e:
+            print(f"[-] 自動下載模型權重時發生錯誤：{e}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run the Keystroke Dynamics verification web app.")
     parser.add_argument("--host", default="127.0.0.1")
@@ -628,6 +655,9 @@ def main() -> int:
 
     # 初始化資料表 (Postgres 或 SQLite)
     init_db()
+    
+    # 檢查並下載模型權重 (防範 Git LFS 指針問題)
+    check_and_download_weights()
 
     address = (args.host, args.port)
     httpd = ThreadingHTTPServer(address, KeystrokeRequestHandler)
