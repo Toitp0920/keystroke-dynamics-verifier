@@ -448,7 +448,7 @@ class KeystrokeRequestHandler(SimpleHTTPRequestHandler):
                         0,
                         len(records),
                         result["score"],
-                        1 if result["is_genuine"] else 0,
+                        bool(result["is_genuine"]),
                         json.dumps(records),
                         "[]"
                     )
@@ -497,7 +497,7 @@ class KeystrokeRequestHandler(SimpleHTTPRequestHandler):
                     int(payload.get("article_character_count", 0)),
                     int(payload.get("keystroke_count", len(keystroke_records))),
                     float(final_result.get("score", 0.0)),
-                    1 if final_result.get("is_genuine") else 0,
+                    bool(final_result.get("is_genuine")),
                     json.dumps(keystroke_records),
                     json.dumps(continuous_results)
                 )
