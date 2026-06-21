@@ -13,12 +13,22 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 from urllib.parse import unquote, urlparse
 
+# 導入 PostgreSQL 驅動 (如果 DATABASE_URL 存在)
+try:
+    import psycopg2
+except ImportError:
+    psycopg2 = None
+
 from keystroke_verifier import BaselineNotFoundError, KeystrokeVerifier
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 THRESHOLD_CONFIG_PATH = PROJECT_ROOT / "threshold_config.json"
 
-# 從環境變數讀取資料庫路徑與快取路徑
+# 自動偵測資料庫配置
+DATABASE_URL = os.environ.get("DATABASE_URL")
+IS_POSTGRES = DATABASE_URL is not None and DATABASE_URL.startswith("postgresql")
+
+# SQLite 本地路徑預設
 DATABASE_PATH = Path(os.environ.get("DATABASE_PATH", PROJECT_ROOT / "keystroke_dynamics.db"))
 PROCESSED_DIR = Path(os.environ.get("PROCESSED_DIR", PROJECT_ROOT / "processed_baselines"))
 
@@ -26,84 +36,194 @@ verifier = KeystrokeVerifier(project_root=PROJECT_ROOT, processed_dir=PROCESSED_
 verify_lock = threading.Lock()
 
 
+def get_db_connection():
+    """獲取資料庫連線 (Postgres 或 SQLite)"""
+    if IS_POSTGRES:
+        if psycopg2 is None:
+            raise ImportError("環境中未安裝 psycopg2-binary，無法連接 PostgreSQL！")
+        return psycopg2.connect(DATABASE_URL)
+    else:
+        conn = sqlite3.connect(DATABASE_PATH)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+
+def q(sql: str) -> str:
+    """自動調整 SQL 語法佔位符。SQLite 使用 '?'，Postgres 使用 '%s'"""
+    if IS_POSTGRES:
+        return sql.replace("?", "%s")
+    return sql
+
+
 def init_db():
-    """初始化 SQLite 資料表與全域預設值"""
-    DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(DATABASE_PATH) as conn:
-        cursor = conn.cursor()
+    """初始化資料表結構與預設閾值"""
+    if IS_POSTGRES:
+        if psycopg2 is None:
+            print("警告：未安裝 psycopg2，無法初始化遠端 PostgreSQL 資料表！")
+            return
         
-        # 1. 建立 user_profiles (用戶特徵基準表)
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS user_profiles (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id TEXT NOT NULL,
-                language TEXT NOT NULL,
-                keystrokes_json TEXT NOT NULL,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_profiles_user_lang ON user_profiles(user_id, language)')
-        
-        # 2. 建立 user_thresholds (用戶/語言閾值表)
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS user_thresholds (
-                user_id TEXT NOT NULL,
-                language TEXT NOT NULL,
-                final_threshold REAL NOT NULL,
-                continuous_threshold REAL NOT NULL,
-                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (user_id, language)
-            )
-        ''')
-        
-        # 3. 建立 verification_sessions (驗證歷程紀錄表)
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS verification_sessions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id TEXT NOT NULL,
-                session_id TEXT NOT NULL,
-                language TEXT NOT NULL,
-                article_character_count INTEGER NOT NULL,
-                keystroke_count INTEGER NOT NULL,
-                final_score REAL NOT NULL,
-                is_genuine INTEGER NOT NULL,
-                keystrokes_json TEXT NOT NULL,
-                continuous_results_json TEXT NOT NULL,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        
-        # 寫入系統預設閾值
-        cursor.execute("SELECT 1 FROM user_thresholds WHERE user_id = 'default' AND language = 'ZH'")
-        if not cursor.fetchone():
-            cursor.execute(
-                "INSERT INTO user_thresholds (user_id, language, final_threshold, continuous_threshold) VALUES ('default', 'ZH', 8.25, 10.9)"
-            )
-        cursor.execute("SELECT 1 FROM user_thresholds WHERE user_id = 'default' AND language = 'EN'")
-        if not cursor.fetchone():
-            cursor.execute(
-                "INSERT INTO user_thresholds (user_id, language, final_threshold, continuous_threshold) VALUES ('default', 'EN', 8.25, 10.9)"
-            )
-            
-        # 貼心功能：從舊的 threshold_config.json 中導入設定值 (僅於初始化時執行)
+        # 雲端 Postgres 建表
+        conn = get_db_connection()
         try:
-            if THRESHOLD_CONFIG_PATH.is_file():
-                with THRESHOLD_CONFIG_PATH.open("r", encoding="utf-8") as f:
-                    config = json.load(f)
-                users = config.get("users", {})
-                if isinstance(users, dict):
-                    for u_id, lang_cfg in users.items():
-                        if isinstance(lang_cfg, dict):
-                            for lang, cfg in lang_cfg.items():
-                                final_val = cfg.get("final") or cfg.get("final_threshold")
-                                cont_val = cfg.get("continuous") or cfg.get("continuous_threshold")
-                                if final_val is not None and cont_val is not None:
+            cursor = conn.cursor()
+            
+            # 1. user_profiles
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS user_profiles (
+                    id SERIAL PRIMARY KEY,
+                    user_id VARCHAR(50) NOT NULL,
+                    language VARCHAR(10) NOT NULL,
+                    keystrokes_json TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_profiles_user_lang ON user_profiles(user_id, language)')
+            
+            # 2. user_thresholds
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS user_thresholds (
+                    user_id VARCHAR(50) NOT NULL,
+                    language VARCHAR(10) NOT NULL,
+                    final_threshold DOUBLE PRECISION NOT NULL,
+                    continuous_threshold DOUBLE PRECISION NOT NULL,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (user_id, language)
+                )
+            ''')
+            
+            # 3. verification_sessions
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS verification_sessions (
+                    id SERIAL PRIMARY KEY,
+                    user_id VARCHAR(50) NOT NULL,
+                    session_id VARCHAR(100) NOT NULL,
+                    language VARCHAR(10) NOT NULL,
+                    article_character_count INTEGER NOT NULL,
+                    keystroke_count INTEGER NOT NULL,
+                    final_score DOUBLE PRECISION NOT NULL,
+                    is_genuine BOOLEAN NOT NULL,
+                    keystrokes_json TEXT NOT NULL,
+                    continuous_results_json TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
+            # 寫入預設閾值
+            cursor.execute("SELECT 1 FROM user_thresholds WHERE user_id = 'default' AND language = 'ZH'")
+            if not cursor.fetchone():
+                cursor.execute(
+                    "INSERT INTO user_thresholds (user_id, language, final_threshold, continuous_threshold) VALUES ('default', 'ZH', 8.25, 10.9)"
+                )
+            cursor.execute("SELECT 1 FROM user_thresholds WHERE user_id = 'default' AND language = 'EN'")
+            if not cursor.fetchone():
+                cursor.execute(
+                    "INSERT INTO user_thresholds (user_id, language, final_threshold, continuous_threshold) VALUES ('default', 'EN', 8.25, 10.9)"
+                )
+                
+            # 導入舊 JSON 設定 (如果有)
+            _import_legacy_thresholds_to_db(cursor)
+            conn.commit()
+            print("[+] PostgreSQL 雲端資料庫初始化完成！")
+        finally:
+            conn.close()
+    else:
+        # SQLite 建表
+        DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        conn = get_db_connection()
+        try:
+            cursor = conn.cursor()
+            
+            # 1. user_profiles
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS user_profiles (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT NOT NULL,
+                    language TEXT NOT NULL,
+                    keystrokes_json TEXT NOT NULL,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_profiles_user_lang ON user_profiles(user_id, language)')
+            
+            # 2. user_thresholds
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS user_thresholds (
+                    user_id TEXT NOT NULL,
+                    language TEXT NOT NULL,
+                    final_threshold REAL NOT NULL,
+                    continuous_threshold REAL NOT NULL,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (user_id, language)
+                )
+            ''')
+            
+            # 3. verification_sessions
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS verification_sessions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    language TEXT NOT NULL,
+                    article_character_count INTEGER NOT NULL,
+                    keystroke_count INTEGER NOT NULL,
+                    final_score REAL NOT NULL,
+                    is_genuine INTEGER NOT NULL,
+                    keystrokes_json TEXT NOT NULL,
+                    continuous_results_json TEXT NOT NULL,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
+            # 寫入預設閾值
+            cursor.execute("SELECT 1 FROM user_thresholds WHERE user_id = 'default' AND language = 'ZH'")
+            if not cursor.fetchone():
+                cursor.execute(
+                    "INSERT INTO user_thresholds (user_id, language, final_threshold, continuous_threshold) VALUES ('default', 'ZH', 8.25, 10.9)"
+                )
+            cursor.execute("SELECT 1 FROM user_thresholds WHERE user_id = 'default' AND language = 'EN'")
+            if not cursor.fetchone():
+                cursor.execute(
+                    "INSERT INTO user_thresholds (user_id, language, final_threshold, continuous_threshold) VALUES ('default', 'EN', 8.25, 10.9)"
+                )
+                
+            _import_legacy_thresholds_to_db(cursor)
+            conn.commit()
+            print(f"[+] 本地 SQLite 資料庫初始化完成：{DATABASE_PATH.name}")
+        finally:
+            conn.close()
+
+
+def _import_legacy_thresholds_to_db(cursor):
+    """將舊的 JSON 閾值設定導入至目前資料表中"""
+    try:
+        if THRESHOLD_CONFIG_PATH.is_file():
+            with THRESHOLD_CONFIG_PATH.open("r", encoding="utf-8") as f:
+                config = json.load(f)
+            users = config.get("users", {})
+            if isinstance(users, dict):
+                for u_id, lang_cfg in users.items():
+                    if isinstance(lang_cfg, dict):
+                        for lang, cfg in lang_cfg.items():
+                            final_val = cfg.get("final") or cfg.get("final_threshold")
+                            cont_val = cfg.get("continuous") or cfg.get("continuous_threshold")
+                            if final_val is not None and cont_val is not None:
+                                if IS_POSTGRES:
+                                    cursor.execute(
+                                        """
+                                        INSERT INTO user_thresholds (user_id, language, final_threshold, continuous_threshold) 
+                                        VALUES (%s, %s, %s, %s)
+                                        ON CONFLICT (user_id, language) 
+                                        DO UPDATE SET final_threshold = EXCLUDED.final_threshold, continuous_threshold = EXCLUDED.continuous_threshold
+                                        """,
+                                        (u_id, lang.upper(), float(final_val), float(cont_val))
+                                    )
+                                else:
                                     cursor.execute(
                                         "INSERT OR REPLACE INTO user_thresholds (user_id, language, final_threshold, continuous_threshold) VALUES (?, ?, ?, ?)",
                                         (u_id, lang.upper(), float(final_val), float(cont_val))
                                     )
-        except Exception:
-            pass
+    except Exception as e:
+        print(f"導入舊設定時發生錯誤 (可忽略)：{e}")
 
 
 def resolve_user_id(user_id: str, language: Optional[str] = None) -> str:
@@ -112,27 +232,29 @@ def resolve_user_id(user_id: str, language: Optional[str] = None) -> str:
     if not requested:
         return requested
     lang = (language or "ZH").upper()
-    with sqlite3.connect(DATABASE_PATH) as conn:
+    conn = get_db_connection()
+    try:
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT DISTINCT user_id FROM user_profiles WHERE LOWER(user_id) = LOWER(?) AND language = ? LIMIT 1",
-            (requested, lang)
-        )
+        sql = q("SELECT DISTINCT user_id FROM user_profiles WHERE LOWER(user_id) = LOWER(?) AND language = ? LIMIT 1")
+        cursor.execute(sql, (requested, lang))
         row = cursor.fetchone()
         if row:
             return row[0]
+    finally:
+        conn.close()
     return requested
 
 
 def get_user_keystrokes_list(user_id: str, language: str) -> list[list[dict[str, Any]]]:
     """從資料庫查出該用戶的所有基準特徵紀錄"""
-    with sqlite3.connect(DATABASE_PATH) as conn:
+    conn = get_db_connection()
+    try:
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT keystrokes_json FROM user_profiles WHERE LOWER(user_id) = LOWER(?) AND language = ?",
-            (user_id, language)
-        )
+        sql = q("SELECT keystrokes_json FROM user_profiles WHERE LOWER(user_id) = LOWER(?) AND language = ?")
+        cursor.execute(sql, (user_id, language))
         rows = cursor.fetchall()
+    finally:
+        conn.close()
         
     if not rows:
         raise BaselineNotFoundError(f"資料庫中找不到用戶 {user_id!r} 的基準特徵。請先註冊。")
@@ -156,39 +278,35 @@ def _configured_threshold(user_id: str, language: Optional[str], mode: str) -> t
     lang = (language or "ZH").upper()
     normalized_mode = "continuous" if mode == "continuous" else "final"
     
-    with sqlite3.connect(DATABASE_PATH) as conn:
-        conn.row_factory = sqlite3.Row
+    conn = get_db_connection()
+    try:
         cursor = conn.cursor()
         
         # 1. 查找特定用戶及特定語言
-        cursor.execute(
-            "SELECT final_threshold, continuous_threshold FROM user_thresholds WHERE user_id = ? AND language = ?",
-            (user_id, lang)
-        )
+        sql = q("SELECT final_threshold, continuous_threshold FROM user_thresholds WHERE user_id = ? AND language = ?")
+        cursor.execute(sql, (user_id, lang))
         row = cursor.fetchone()
         if row:
-            val = row["continuous_threshold"] if normalized_mode == "continuous" else row["final_threshold"]
+            val = row[1] if normalized_mode == "continuous" else row[0]
             return val, f"db_config:{normalized_mode}"
             
         # 2. 查找特定用戶全域設定 (ALL)
-        cursor.execute(
-            "SELECT final_threshold, continuous_threshold FROM user_thresholds WHERE user_id = ? AND language = 'ALL'",
-            (user_id,)
-        )
+        sql = q("SELECT final_threshold, continuous_threshold FROM user_thresholds WHERE user_id = ? AND language = 'ALL'")
+        cursor.execute(sql, (user_id,))
         row = cursor.fetchone()
         if row:
-            val = row["continuous_threshold"] if normalized_mode == "continuous" else row["final_threshold"]
+            val = row[1] if normalized_mode == "continuous" else row[0]
             return val, f"db_config:{normalized_mode}:all"
             
         # 3. 查找預設設定
-        cursor.execute(
-            "SELECT final_threshold, continuous_threshold FROM user_thresholds WHERE user_id = 'default' AND language = ?",
-            (lang,)
-        )
+        sql = q("SELECT final_threshold, continuous_threshold FROM user_thresholds WHERE user_id = 'default' AND language = ?")
+        cursor.execute(sql, (lang,))
         row = cursor.fetchone()
         if row:
-            val = row["continuous_threshold"] if normalized_mode == "continuous" else row["final_threshold"]
+            val = row[1] if normalized_mode == "continuous" else row[0]
             return val, f"db_config:{normalized_mode}:default"
+    finally:
+        conn.close()
             
     return None, None
 
@@ -217,7 +335,8 @@ class KeystrokeRequestHandler(SimpleHTTPRequestHandler):
                 {
                     "ok": True,
                     "model_loaded": verifier.model is not None,
-                    "database_path": str(DATABASE_PATH.resolve()),
+                    "database_type": "PostgreSQL" if IS_POSTGRES else "SQLite",
+                    "database_path": DATABASE_URL if IS_POSTGRES else str(DATABASE_PATH.resolve()),
                     "processed_dir": str(PROCESSED_DIR.resolve()),
                 }
             )
@@ -310,16 +429,18 @@ class KeystrokeRequestHandler(SimpleHTTPRequestHandler):
             result["threshold_source"] = threshold_source_override
             result["verification_mode"] = "continuous" if mode == "continuous" else "final"
 
-        # 寫入歷史結果 (對應原有的單次驗證寫入，雖然主要流程在 free-text-session 中紀錄)
+        # 寫入歷史結果 (對應原有的單次驗證寫入)
         if payload.get("save_result", True):
-            with sqlite3.connect(DATABASE_PATH) as conn:
+            conn = get_db_connection()
+            try:
                 cursor = conn.cursor()
-                cursor.execute(
-                    """
+                sql = q("""
                     INSERT INTO verification_sessions 
                     (user_id, session_id, language, article_character_count, keystroke_count, final_score, is_genuine, keystrokes_json, continuous_results_json) 
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
+                """)
+                cursor.execute(
+                    sql,
                     (
                         user_id,
                         f"single_{_timestamp()}",
@@ -332,6 +453,9 @@ class KeystrokeRequestHandler(SimpleHTTPRequestHandler):
                         "[]"
                     )
                 )
+                conn.commit()
+            finally:
+                conn.close()
 
         self.send_json({"ok": True, "result": result})
 
@@ -355,15 +479,17 @@ class KeystrokeRequestHandler(SimpleHTTPRequestHandler):
 
         session_id = payload.get("session_id") or f"session_{_timestamp()}"
         
-        # 寫入歷程紀錄至 SQLite
-        with sqlite3.connect(DATABASE_PATH) as conn:
+        # 寫入歷程紀錄至資料庫
+        conn = get_db_connection()
+        try:
             cursor = conn.cursor()
-            cursor.execute(
-                """
+            sql = q("""
                 INSERT INTO verification_sessions 
                 (user_id, session_id, language, article_character_count, keystroke_count, final_score, is_genuine, keystrokes_json, continuous_results_json) 
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
+            """)
+            cursor.execute(
+                sql,
                 (
                     user_id,
                     session_id,
@@ -376,6 +502,9 @@ class KeystrokeRequestHandler(SimpleHTTPRequestHandler):
                     json.dumps(continuous_results)
                 )
             )
+            conn.commit()
+        finally:
+            conn.close()
 
         self.send_json(
             {
@@ -396,17 +525,19 @@ class KeystrokeRequestHandler(SimpleHTTPRequestHandler):
         if language not in ("ZH", "EN"):
             raise ValueError("語言類型不合法，必須為 ZH 或 EN")
 
-        # 將擊鍵陣列轉為 JSON 字串存入 SQLite
+        # 將擊鍵陣列轉為 JSON 字串存入資料庫
         keystrokes_json = json.dumps(keystrokes)
         
-        with sqlite3.connect(DATABASE_PATH) as conn:
+        conn = get_db_connection()
+        try:
             cursor = conn.cursor()
-            cursor.execute(
-                "INSERT INTO user_profiles (user_id, language, keystrokes_json) VALUES (?, ?, ?)",
-                (user_id, language, keystrokes_json)
-            )
+            sql = q("INSERT INTO user_profiles (user_id, language, keystrokes_json) VALUES (?, ?, ?)")
+            cursor.execute(sql, (user_id, language, keystrokes_json))
+            conn.commit()
+        finally:
+            conn.close()
 
-        # 清除 processed_baselines 資料夾下該用戶的舊快取，確保下次登入時會重新解析新的基準資料
+        # 清除 processed_baselines 資料夾下該用戶的舊快取
         cache_file_zh = PROCESSED_DIR / f"{user_id}_ZH.npy"
         cache_file_en = PROCESSED_DIR / f"{user_id}_EN.npy"
         cache_file_all = PROCESSED_DIR / f"{user_id}_ALL.npy"
@@ -495,7 +626,7 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=8000)
     args = parser.parse_args()
 
-    # 初始化 SQLite
+    # 初始化資料表 (Postgres 或 SQLite)
     init_db()
 
     address = (args.host, args.port)
