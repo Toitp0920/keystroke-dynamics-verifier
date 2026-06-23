@@ -71,6 +71,7 @@ const keyCodeMap = {
 const state = {
   participantId: "",
   sessionId: "",
+  language: LANGUAGE,
   baselineInfo: null,
   keyCounter: 0,
   globalRecords: [],
@@ -247,7 +248,7 @@ function startContinuousVerification(records) {
 
   const promise = apiRequest("/api/verify", {
     user_id: state.participantId,
-    language: LANGUAGE,
+    language: state.language || LANGUAGE,
     records: chunkRecords,
     verification_mode: "continuous",
     matching_strategy: "mean_file",
@@ -383,7 +384,7 @@ async function runFinalVerification() {
 
   const data = await apiRequest("/api/verify", {
     user_id: state.participantId,
-    language: LANGUAGE,
+    language: state.language || LANGUAGE,
     records,
     verification_mode: "final",
     matching_strategy: "mean_file",
@@ -397,7 +398,7 @@ async function runFinalVerification() {
 async function saveFreeTextSession() {
   const payload = {
     user_id: state.participantId,
-    language: LANGUAGE,
+    language: state.language || LANGUAGE,
     session_id: state.sessionId,
     article: currentArticleText(),
     article_character_count: countReadableCharacters(currentArticleText()),
@@ -540,14 +541,14 @@ function downloadBlob(filename, content, mimeType) {
 function downloadKeystrokes() {
   const records = buildExportRecords();
   const tsv = recordsToTsv(records);
-  const filename = `free_text_keystrokes_ZH_${state.participantId}_${currentTimestamp()}.tsv`;
+  const filename = `free_text_keystrokes_${state.language || LANGUAGE}_${state.participantId}_${currentTimestamp()}.tsv`;
   downloadBlob(filename, tsv, "text/tab-separated-values;charset=utf-8");
 }
 
 function downloadResults() {
   const payload = {
     participant_id: state.participantId,
-    language: LANGUAGE,
+    language: state.language || LANGUAGE,
     session_id: state.sessionId,
     generated_at: new Date().toISOString(),
     article: currentArticleText(),
@@ -558,7 +559,7 @@ function downloadResults() {
     server_result_path: state.sessionResultPath,
     server_keystroke_tsv_path: state.sessionKeystrokePath,
   };
-  const filename = `free_text_results_ZH_${state.participantId}_${currentTimestamp()}.json`;
+  const filename = `free_text_results_${state.language || LANGUAGE}_${state.participantId}_${currentTimestamp()}.json`;
   downloadBlob(filename, JSON.stringify(payload, null, 2), "application/json;charset=utf-8");
 }
 
@@ -580,6 +581,7 @@ async function login() {
 
     state.participantId = data.user_id || userId;
     state.sessionId = `free_text_${Date.now()}`;
+    state.language = data.language || LANGUAGE;
     state.baselineInfo = data;
     el.writerName.textContent = state.participantId;
     setMessage(el.loginMessage, "註冊資料確認完成。", "ok");

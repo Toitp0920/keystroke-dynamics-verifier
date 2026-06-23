@@ -366,13 +366,40 @@ class KeystrokeRequestHandler(SimpleHTTPRequestHandler):
             self.send_error_json(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
 
     def handle_login(self, payload: Dict[str, Any]) -> None:
-        user_id = str(payload.get("user_id", "")).strip()
+        user_id_raw = str(payload.get("user_id", "")).strip()
         language = self.normalize_language(payload.get("language", "ZH"))
         force = bool(payload.get("force", False))
-        if not user_id:
+        if not user_id_raw:
             raise ValueError("Missing user_id")
 
-        user_id = resolve_user_id(user_id, language=language)
+        # 智慧型語言自動偵測與切換
+        conn = get_db_connection()
+        try:
+            cursor = conn.cursor()
+            sql = q("SELECT DISTINCT language, user_id FROM user_profiles WHERE LOWER(user_id) = LOWER(?)")
+            cursor.execute(sql, (user_id_raw,))
+            rows = cursor.fetchall()
+            registered_info = [(row[0].upper(), row[1]) for row in rows] if rows else []
+        finally:
+            conn.close()
+
+        if not registered_info:
+            raise BaselineNotFoundError(f"資料庫中找不到用戶 {user_id_raw!r} 的基準特徵。請先註冊。")
+
+        registered_langs = [item[0] for item in registered_info]
+        real_user_id = registered_info[0][1]
+
+        # 如果指定語言不在註冊語言中，則自動切換為用戶第一個註冊的語言
+        if language not in registered_langs:
+            language = registered_langs[0]
+
+        # 確保使用與該語言註冊時相符的正確 user_id 拼寫
+        for lang_reg, u_id in registered_info:
+            if lang_reg == language:
+                real_user_id = u_id
+                break
+
+        user_id = real_user_id
         keystrokes_list = get_user_keystrokes_list(user_id, language)
         
         # 呼叫 Verifier 計算或讀取快取
