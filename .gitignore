@@ -9,6 +9,7 @@ __pycache__/
 *.log
 Thumbs.db
 .DS_Store
+.agents/
 
 # Database files
 keystroke_dynamics.db
