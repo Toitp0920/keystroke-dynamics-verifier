@@ -53,6 +53,7 @@
 *   `10persentData_model.weights.h5`：預先訓練好的神經網路模型權重檔案。
 *   `threshold_config.json`：存放不同使用者判定閾值的設定檔。
 *   `requirements.txt`：專案所需的 Python 套件清單。
+*   `Dockerfile`：用於容器化部署的 Docker 設定檔。
 *   `.gitignore`：Git 忽略規則，防止個人特徵數據與驗證結果被上傳至公開倉庫。
 
 ---
@@ -139,3 +140,36 @@ Press Ctrl+C to stop.
 *   `final`：最後送出文章時的總結驗證閾值。
 *   `continuous`：背景每 100 筆按鍵特徵進行連續驗證時的閾值。
 *   *相似度偏差值小於該閾值時，系統將判定為「符合本人」；大於該閾值則判定為「特徵異常」。修改後請重啟伺服器以套用變更。*
+
+---
+
+## ☁️ 雲端與容器化部署 (Docker & Railway & Neon DB)
+
+本專案支援無狀態（Stateless）容器化部署，特別適合部署於 Railway 或 Heroku 等雲端平台，並對接 Neon 等雲端 PostgreSQL 資料庫，解決免費雲端平台不支援本地磁碟掛載（Volume）的問題。
+
+### 1. 雙資料庫切換機制
+後端伺服器在啟動時會自動檢測環境變數：
+*   **本機開發環境**：當無設定 `DATABASE_URL` 時，自動啟用 SQLite 本地資料庫模式，數據將寫入 `keystroke_dynamics.db`。
+*   **雲端生產環境**：當環境變數中存在 `DATABASE_URL`（例如對接 Neon PostgreSQL）時，後端會自動切換為 PostgreSQL 資料庫模式，所有特徵基準、判定閾值、歷史寫作驗證紀錄直接寫入雲端資料庫。此時容器達成完全的「無狀態（Stateless）」，不需擔心容器重啟導致數據丟失。
+
+### 2. 自動模型權重防護機制
+由於雲端部署平台在從 GitHub 拉取專案時預設不會拉取完整 Git LFS 大檔案，導致 `.h5` 模型僅為 130 bytes 的文字指標。
+本專案的 `server.py` 設有自動修復機制：**伺服器啟動時，若偵測到模型權重檔案不存在或小於 1MB，會自動從 GitHub LFS 直鏈（或指定的外部直鏈）下載 227MB 的真實模型數據並覆蓋**，確保服務啟動後即可直接載入模型。
+
+### 3. 使用 Docker 本地部署
+您可以在本機透過 Docker 進行打包與測試：
+```bash
+# 1. 構建 Docker 映像檔
+docker build -t keystroke-verifier .
+
+# 2. 啟動容器 (預設使用本地 SQLite)
+docker run -d -p 8000:8000 keystroke-verifier
+```
+
+### 4. 部署至 Railway 的配置步驟
+1. 在 Railway 上新增一個服務，並連結您的 GitHub 倉庫。
+2. 在 Railway 上新增一個 PostgreSQL 數據庫（或是連接到 Neon DB），取得連線字串後將其設定為該服務的環境變數：
+   *   `DATABASE_URL`：設定為您資料庫的 PostgreSQL 連線網址。
+3. Railway 會根據根目錄的 `Dockerfile` 自動完成構建與啟動。
+4. 啟動日誌中會出現 `[!] 偵測到模型權重檔案不存在或為 Git LFS 指標檔案...`，這代表正在自動下載真實權重檔案，請耐心等待其下載完成（顯示 `[+] 成功下載並取代模型權重！`），隨後即可直接存取您的 Public 網址。
+
