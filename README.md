@@ -44,7 +44,7 @@
 
 ## 📐 系統設計與架構圖
 
-本專案的系統設計與資料流向如下圖所示（此圖表可直接在支援 Markdown 渲染的平台如 GitHub、VS Code 中預覽）：
+本專案的系統設計與資料流向如下圖所示：
 
 ```mermaid
 flowchart TB
@@ -102,19 +102,6 @@ flowchart TB
         DB --- Thresholds
         DB --- Sessions
         LegacyConfig -. "init_db" .-> Thresholds
-    end
-
-    subgraph Offline["離線／相容工具（不在目前 Web 主路徑）"]
-        LegacyTSV[("baseline_profiles/*.tsv<br/>舊式基準來源")]
-        CLI["keystroke_verifier.py CLI<br/>前處理／Embedding／TSV 驗證"]
-        Training["type2branch_model/<br/>train.py／evaluate.py／model.py／conf.py"]
-        Dataset[("外部訓練 datasets/*.npy<br/>及未隨專案提供的訓練模組")]
-        Helpers["get_ID.py／duplicate.py<br/>受試者 ID 整理"]
-        LegacyDirs["verification_results/<br/>舊式檔案輸出目錄"]
-        LegacyTSV --> CLI
-        Dataset --> Training --> Weights
-        Helpers -.-> LegacyTSV
-        CLI -.-> LegacyDirs
     end
 
     subgraph Deployment["啟動與部署"]
