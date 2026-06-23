@@ -1,4 +1,4 @@
-# 自由文字打字特徵註冊與寫作驗證系統 (Keystroke Dynamics Free-Text Verification & Registration System)
+# 中文自由文本擊鍵動態身分驗證系統 (Keystroke Dynamics Free-Text Verification & Registration System)
 
 本專案是一個整合了**打字特徵註冊錄製**與**自由寫作身分驗證**的本機 Web 系統。系統利用深度學習技術，透過分析使用者自由打字時的微觀節奏（如按鍵按壓時間 Hold Time 以及按鍵間飛行時間 Flight Time），提煉出個人的打字行為特徵，並進行身分比對與連續驗證。
 
